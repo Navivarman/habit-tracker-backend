@@ -2,7 +2,9 @@ package com.habittracker.backend.service;
 
 import com.habittracker.backend.model.*;
 import com.habittracker.backend.repository.*;
+import com.habittracker.backend.dto.StepUpdatePayload;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.messaging.simp.SimpMessagingTemplate; // 👈 Required for WebSockets
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,11 +19,13 @@ public class RoomService {
     @Autowired private RoomMemberRepository roomMemberRepository;
     @Autowired private UserRepository userRepository;
     @Autowired private DailyHabitLogRepository logRepository;
+    @Autowired private SimpMessagingTemplate messagingTemplate; // 👈 Injected message broker dispatcher
 
     // 1. Create a room with a random 6-character alphanumeric invite code
     @Transactional
     public Room createRoom(String name, Long creatorId, LocalDate targetMonth) {
-        User creator = userRepository.findById(creatorId).orElseThrow();
+        User creator = userRepository.findById(creatorId)
+                .orElseThrow(() -> new RuntimeException("Creator not found"));
 
         Room room = new Room();
         room.setName(name);
@@ -42,7 +46,8 @@ public class RoomService {
     public RoomMember joinRoom(String inviteCode, Long userId) {
         Room room = roomRepository.findByInviteCode(inviteCode.toUpperCase())
                 .orElseThrow(() -> new RuntimeException("Invalid invite code"));
-        User user = userRepository.findById(userId).orElseThrow();
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
 
         RoomMemberId memberId = new RoomMemberId(room.getId(), user.getId());
         if (roomMemberRepository.existsById(memberId)) {
@@ -58,7 +63,7 @@ public class RoomService {
         return roomMemberRepository.save(member);
     }
 
-    // 3. 🏁 THE LUDO ENGINE: Evaluate and move token if all habits are completed
+    // 3. 🏁 THE LUDO ENGINE: Evaluate and move token if all habits are completed + Broadcast over WebSockets
     @Transactional
     public void evaluateLudoProgression(Long userId, LocalDate date, boolean isUndo) {
         long totalHabits = logRepository.countTotalHabitsForUser(userId);
@@ -75,17 +80,23 @@ public class RoomService {
                     member.setCurrentStep(member.getCurrentStep() - 1);
                     roomMemberRepository.save(member);
                     System.out.println("↩️ Undo detected! Pulled User " + userId + " back to step " + member.getCurrentStep());
+
+                    // 🚀 Live Stream the regression change to everyone in the room
+                    messagingTemplate.convertAndSend("/topic/room/" + member.getRoom().getId(),
+                            new StepUpdatePayload(member.getRoom().getId(), userId, member.getCurrentStep()));
                 }
             } else {
                 // 🚀 PROGRESS LOGIC: If all required habits are now completed
                 if (totalHabits > 0 && totalHabits == completedHabits) {
                     // Only advance if they haven't already taken their step for today
-                    // (e.g., if step matches day of month, they already moved)
-                    // Assuming perfect consistency puts step equal to dayOfMonth
                     if (member.getCurrentStep() < dayOfMonth) {
                         member.setCurrentStep(member.getCurrentStep() + 1);
                         roomMemberRepository.save(member);
                         System.out.println("🎉 Legit step! User " + userId + " moved forward to step " + member.getCurrentStep());
+
+                        // 🚀 Live Stream the advancement change to everyone in the room
+                        messagingTemplate.convertAndSend("/topic/room/" + member.getRoom().getId(),
+                                new StepUpdatePayload(member.getRoom().getId(), userId, member.getCurrentStep()));
                     }
                 }
             }
