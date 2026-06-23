@@ -21,4 +21,6 @@ public interface DailyHabitLogRepository extends JpaRepository<DailyHabitLog, Lo
     // Count how many habits were successfully completed today
     @Query("SELECT COUNT(d) FROM DailyHabitLog d WHERE d.user.id = :userId AND d.logDate = :logDate AND d.isCompleted = true")
     long countCompletedHabitsForUserAndDate(@Param("userId") Long userId, @Param("logDate") LocalDate logDate);
+
+    List<DailyHabitLog> findByUserIdAndLogDateBetween(Long userId, LocalDate startDate, LocalDate endDate);
 }
