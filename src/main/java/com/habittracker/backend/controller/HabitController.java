@@ -63,4 +63,17 @@ public class HabitController {
         DailyHabitLog log = habitService.toggleHabitCompletion(userId, habitId, date);
         return ResponseEntity.ok(log);
     }
+
+    @PutMapping("/{habitId}")
+    public ResponseEntity<Habit> updateHabit(@PathVariable Long habitId, @RequestBody Map<String, Object> payload) {
+        String title = payload.get("title").toString();
+        LocalTime reminderTime = LocalTime.parse(payload.get("reminderTime").toString());
+        return ResponseEntity.ok(habitService.updateHabit(habitId, title, reminderTime));
+    }
+
+    @DeleteMapping("/{habitId}")
+    public ResponseEntity<Void> deleteHabit(@PathVariable Long habitId) {
+        habitService.deleteHabit(habitId);
+        return ResponseEntity.noContent().build();
+    }
 }

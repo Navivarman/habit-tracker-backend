@@ -80,4 +80,20 @@ public class HabitService {
 
         return savedLog;
     }
+
+    @Transactional
+    public Habit updateHabit(Long habitId, String newTitle, LocalTime newReminderTime) {
+        Habit habit = habitRepository.findById(habitId).orElseThrow();
+        habit.setTitle(newTitle);
+        habit.setReminderTime(newReminderTime);
+        return habitRepository.save(habit);
+    }
+
+    @Transactional
+    public void deleteHabit(Long habitId) {
+        Habit habit = habitRepository.findById(habitId).orElseThrow();
+        // Soft delete to preserve historical data logging integrity
+        habit.setActive(false);
+        habitRepository.save(habit);
+    }
 }
