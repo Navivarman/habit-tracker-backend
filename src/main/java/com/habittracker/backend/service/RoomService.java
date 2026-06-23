@@ -60,19 +60,34 @@ public class RoomService {
 
     // 3. 🏁 THE LUDO ENGINE: Evaluate and move token if all habits are completed
     @Transactional
-    public void evaluateLudoProgression(Long userId, LocalDate date) {
+    public void evaluateLudoProgression(Long userId, LocalDate date, boolean isUndo) {
         long totalHabits = logRepository.countTotalHabitsForUser(userId);
         long completedHabits = logRepository.countCompletedHabitsForUserAndDate(userId, date);
 
-        // Safeguard: User must have at least 1 habit assigned to progress
-        if (totalHabits > 0 && totalHabits == completedHabits) {
-            List<RoomMember> memberships = roomMemberRepository.findByUserId(userId);
+        List<RoomMember> memberships = roomMemberRepository.findByUserId(userId);
+        int dayOfMonth = date.getDayOfMonth();
 
-            for (RoomMember member : memberships) {
-                // Advance 1 step
-                member.setCurrentStep(member.getCurrentStep() + 1);
-                roomMemberRepository.save(member);
-                System.out.println("🎉 User " + userId + " advanced to step " + member.getCurrentStep() + " in room " + member.getRoom().getName());
+        for (RoomMember member : memberships) {
+            if (isUndo) {
+                // ↩️ UNDO LOGIC: If it was a perfect day but the user just unchecked a habit
+                // and their token had already advanced for today, pull it back by 1.
+                if (completedHabits == totalHabits - 1 && member.getCurrentStep() > 0) {
+                    member.setCurrentStep(member.getCurrentStep() - 1);
+                    roomMemberRepository.save(member);
+                    System.out.println("↩️ Undo detected! Pulled User " + userId + " back to step " + member.getCurrentStep());
+                }
+            } else {
+                // 🚀 PROGRESS LOGIC: If all required habits are now completed
+                if (totalHabits > 0 && totalHabits == completedHabits) {
+                    // Only advance if they haven't already taken their step for today
+                    // (e.g., if step matches day of month, they already moved)
+                    // Assuming perfect consistency puts step equal to dayOfMonth
+                    if (member.getCurrentStep() < dayOfMonth) {
+                        member.setCurrentStep(member.getCurrentStep() + 1);
+                        roomMemberRepository.save(member);
+                        System.out.println("🎉 Legit step! User " + userId + " moved forward to step " + member.getCurrentStep());
+                    }
+                }
             }
         }
     }

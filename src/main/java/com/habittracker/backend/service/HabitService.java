@@ -55,7 +55,6 @@ public class HabitService {
     public DailyHabitLog toggleHabitCompletion(Long userId, Long habitId, LocalDate date) {
         DailyHabitLog log = logRepository.findByUserIdAndHabitIdAndLogDate(userId, habitId, date)
                 .orElseGet(() -> {
-                    // Fallback if log doesn't exist yet for this date
                     User user = userRepository.findById(userId).orElseThrow();
                     Habit habit = habitRepository.findById(habitId).orElseThrow();
                     DailyHabitLog newLog = new DailyHabitLog();
@@ -65,13 +64,20 @@ public class HabitService {
                     return newLog;
                 });
 
-        // Toggle state
-        boolean currentStatus = log.isCompleted();
-        log.setCompleted(!currentStatus);
-        log.setCompletedAt(!currentStatus ? LocalDateTime.now() : null);
+        // Capture the state BEFORE the toggle
+        boolean wasCompletedBeforeClick = log.isCompleted();
 
+        // Toggle state
+        log.setCompleted(!wasCompletedBeforeClick);
+        log.setCompletedAt(!wasCompletedBeforeClick ? LocalDateTime.now() : null);
         DailyHabitLog savedLog = logRepository.save(log);
-        roomService.evaluateLudoProgression(userId, date);
+
+        // If it WAS completed, but now it's not -> this is an UNDO action!
+        boolean isUndo = wasCompletedBeforeClick;
+
+        // Run the updated bidirectional engine
+        roomService.evaluateLudoProgression(userId, date, isUndo);
+
         return savedLog;
     }
 }
