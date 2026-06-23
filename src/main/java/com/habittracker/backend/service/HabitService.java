@@ -21,6 +21,7 @@ public class HabitService {
     @Autowired private HabitRepository habitRepository;
     @Autowired private DailyHabitLogRepository logRepository;
     @Autowired private UserRepository userRepository;
+    @Autowired private RoomService roomService;
 
     // 1. Create a brand new habit and seed today's log for it
     @Transactional
@@ -69,6 +70,8 @@ public class HabitService {
         log.setCompleted(!currentStatus);
         log.setCompletedAt(!currentStatus ? LocalDateTime.now() : null);
 
-        return logRepository.save(log);
+        DailyHabitLog savedLog = logRepository.save(log);
+        roomService.evaluateLudoProgression(userId, date);
+        return savedLog;
     }
 }
