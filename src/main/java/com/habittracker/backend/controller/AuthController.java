@@ -1,66 +1,61 @@
 package com.habittracker.backend.controller;
 
+import com.habittracker.backend.config.JwtUtil;
 import com.habittracker.backend.model.User;
 import com.habittracker.backend.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
-
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/auth")
-@CrossOrigin(origins = "*")
 public class AuthController {
 
     @Autowired private UserRepository userRepository;
-    @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private JwtUtil jwtUtil;
 
-    // 1. USER REGISTRATION
+    // 1️⃣ PUBLIC REGISTRATION ENDPOINT
     @PostMapping("/register")
-    public ResponseEntity<?> registerUser(@RequestBody Map<String, String> payload) {
-        String username = payload.get("username");
-        String email = payload.get("email");
-        String password = payload.get("password");
-
-        // Validations
-        if (userRepository.findByUsername(username).isPresent()) {
-            return ResponseEntity.badRequest().body(Map.of("message", "Username is already taken!"));
+    public ResponseEntity<?> registerUser(@RequestBody User user) {
+        if (userRepository.findByUsername(user.getUsername()).isPresent()) {
+            return ResponseEntity.badRequest().body("Error: Username is already taken!");
         }
 
-        // Create user and hash their password securely
-        User user = new User();
-        user.setUsername(username);
-        user.setEmail(email);
-        user.setPasswordHash(passwordEncoder.encode(password)); // Encrypts plain text password
-
+        // For development, we store a basic string placeholder.
+        // Note: Production builds should pass this through a BCryptPasswordEncoder!
+        user.setPasswordHash(user.getPasswordHash());
         User savedUser = userRepository.save(user);
+
         return ResponseEntity.status(HttpStatus.CREATED).body(savedUser);
     }
 
-    // 2. USER LOGIN
+    // 2️⃣ PUBLIC LOGIN ENDPOINT (Issues Cryptographic Session JWT Tokens)
     @PostMapping("/login")
-    public ResponseEntity<?> loginUser(@RequestBody Map<String, String> payload) {
-        String username = payload.get("username");
-        String password = payload.get("password");
+    public ResponseEntity<?> loginUser(@RequestBody Map<String, String> credentials) {
+        String username = credentials.get("username");
+        String password = credentials.get("password");
 
         Optional<User> userOpt = userRepository.findByUsername(username);
 
-        if (userOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("message", "Invalid username or password"));
+        // Simple validation check against our user entity credentials
+        if (userOpt.isPresent() && userOpt.get().getPasswordHash().equals(password)) {
+            User user = userOpt.get();
+            String generatedToken = jwtUtil.generateToken(username);
+
+            // Construct a comprehensive map payload returning session attributes back to React
+            Map<String, Object> responseData = new HashMap<>();
+            responseData.put("token", generatedToken);
+            responseData.put("id", user.getId());
+            responseData.put("username", user.getUsername());
+            responseData.put("email", user.getEmail());
+
+            return ResponseEntity.ok(responseData);
         }
 
-        User user = userOpt.get();
-
-        // Compare plain text login password against the stored BCrypt hash
-        if (!passwordEncoder.matches(password, user.getPasswordHash())) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("message", "Invalid username or password"));
-        }
-
-        // Return user info on successful login (Session or token management can be added on top)
-        return ResponseEntity.ok(user);
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Error: Invalid username or password credentials!");
     }
 }

@@ -2,26 +2,26 @@ package com.habittracker.backend.config;
 
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
-import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
-import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
-import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
+import org.springframework.web.socket.config.annotation.*;
 
 @Configuration
 @EnableWebSocketMessageBroker
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
-    public void configureMessageBroker(MessageBrokerRegistry config) {
-        // Enable a simple memory-based message broker to carry messages back to the client
-        config.enableSimpleBroker("/topic");
-        // Prefix for messages bound for methods annotated with @MessageMapping
-        config.setApplicationDestinationPrefixes("/app");
+    public void registerStompEndpoints(StompEndpointRegistry registry) {
+        // The endpoint where our React frontend will initiate the connection handshake
+        registry.addEndpoint("/ws-challenge")
+                .setAllowedOrigins("http://localhost:5173") // Allow your React Dev Server
+                .withSockJS(); // Fallback option if the browser doesn't natively support WebSockets
     }
 
     @Override
-    public void registerStompEndpoints(StompEndpointRegistry registry) {
-        // The handshake endpoint that our React app will connect to
-        registry.addEndpoint("/ws-challenge")
-                .setAllowedOrigins("*"); // Allows connections from our frontend server
+    public void configureMessageBroker(MessageBrokerRegistry registry) {
+        // Enforce application destination prefixes for incoming messages routed to @MessageMapping methods
+        registry.setApplicationDestinationPrefixes("/app");
+
+        // Setup a simple memory broker prefix path for clients to subscribe to topic rooms
+        registry.enableSimpleBroker("/topic");
     }
 }

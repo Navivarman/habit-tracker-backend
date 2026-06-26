@@ -17,7 +17,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/habits")
-@CrossOrigin(origins = "*") // Allows your React frontend to talk to this backend later
+@CrossOrigin(origins = "http://localhost:5173")// Allows your React frontend to talk to this backend later
 public class HabitController {
 
     @Autowired private HabitService habitService;
@@ -75,5 +75,15 @@ public class HabitController {
     public ResponseEntity<Void> deleteHabit(@PathVariable Long habitId) {
         habitService.deleteHabit(habitId);
         return ResponseEntity.noContent().build();
+    }
+
+    // 4. Fetch habits with their true completion status for a specific date
+    @GetMapping("/user/{userId}/date/{date}")
+    public ResponseEntity<List<Map<String, Object>>> getHabitsWithCompletionStatus(
+            @PathVariable Long userId,
+            @PathVariable @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+
+        List<Map<String, Object>> habitsWithStatus = habitService.getHabitsWithStatusForDate(userId, date);
+        return ResponseEntity.ok(habitsWithStatus);
     }
 }

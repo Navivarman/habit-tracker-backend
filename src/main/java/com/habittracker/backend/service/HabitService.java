@@ -9,7 +9,9 @@ import com.habittracker.backend.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -95,5 +97,30 @@ public class HabitService {
         // Soft delete to preserve historical data logging integrity
         habit.setActive(false);
         habitRepository.save(habit);
+    }
+
+    public List<Map<String, Object>> getHabitsWithStatusForDate(Long userId, LocalDate date) {
+        // Fetch all active base habits
+        List<Habit> activeHabits = habitRepository.findByUserIdAndIsActiveTrue(userId);
+        List<Map<String, Object>> result = new ArrayList<>();
+
+        for (Habit habit : activeHabits) {
+            Map<String, Object> habitMap = new HashMap<>();
+
+            // Removed the invalid utilizeDetails line completely 🛠️
+            habitMap.put("id", habit.getId());
+            habitMap.put("title", habit.getTitle());
+            habitMap.put("reminderTime", habit.getReminderTime().toString());
+
+            // Check if a completion log exists in the database for this specific day
+            boolean isCompletedToday = logRepository.findByUserIdAndHabitIdAndLogDate(userId, habit.getId(), date)
+                    .map(DailyHabitLog::isCompleted)
+                    .orElse(false);
+
+            habitMap.put("completed", isCompletedToday);
+            result.add(habitMap);
+        }
+
+        return result;
     }
 }
