@@ -21,6 +21,10 @@ public class RoomService {
     @Autowired private DailyHabitLogRepository logRepository;
     @Autowired private SimpMessagingTemplate messagingTemplate;
 
+    // 🌟 Injected room task repositories
+    @Autowired private RoomTaskRepository roomTaskRepository;
+    @Autowired private RoomTaskLogRepository roomTaskLogRepository;
+
     // 1. Create a room (Creator becomes an APPROVED ADMIN instantly)
     @Transactional
     public Room createRoom(String name, Long creatorId, LocalDate targetMonth) {
@@ -42,8 +46,8 @@ public class RoomService {
         adminMember.setRoom(savedRoom);
         adminMember.setUser(creator);
         adminMember.setCurrentStep(0);
-        adminMember.setStatus(RoomMember.MembershipStatus.APPROVED); // 🌟 Admin is pre-approved
-        adminMember.setRole(RoomMember.RoomRole.ADMIN);             // 🌟 Admin role assignment
+        adminMember.setStatus(RoomMember.MembershipStatus.APPROVED);
+        adminMember.setRole(RoomMember.RoomRole.ADMIN);
 
         roomMemberRepository.save(adminMember);
         return savedRoom;
@@ -67,8 +71,8 @@ public class RoomService {
         member.setRoom(room);
         member.setUser(user);
         member.setCurrentStep(0);
-        member.setStatus(RoomMember.MembershipStatus.PENDING); // 🌟 Requires Admin authorization
-        member.setRole(RoomMember.RoomRole.MEMBER);           // 🌟 Base role
+        member.setStatus(RoomMember.MembershipStatus.PENDING);
+        member.setRole(RoomMember.RoomRole.MEMBER);
 
         return roomMemberRepository.save(member);
     }
@@ -76,7 +80,6 @@ public class RoomService {
     // 3. Admin workflow actions: Approve or Reject a user's join request
     @Transactional
     public void processJoinRequest(Long roomId, Long targetUserId, Long adminId, boolean approve) {
-        // Enforce security guard check
         RoomMember adminCheck = roomMemberRepository.findByRoomIdAndUserId(roomId, adminId)
                 .orElseThrow(() -> new RuntimeException("Admin context mapping not found"));
 
@@ -92,11 +95,11 @@ public class RoomService {
             pendingMember.setStatus(RoomMember.MembershipStatus.APPROVED);
             roomMemberRepository.save(pendingMember);
         } else {
-            roomMemberRepository.delete(pendingMember); // Clear from database if rejected
+            roomMemberRepository.delete(pendingMember);
         }
     }
 
-    // 4. THE LUDO ENGINE (Unchanged, evaluating step progression for APPROVED users only)
+    // 4. THE ORIGINAL PERSONAL LUDO ENGINE
     @Transactional
     public void evaluateLudoProgression(Long userId, LocalDate date, boolean isUndo) {
         long totalHabits = logRepository.countTotalHabitsForUser(userId);
@@ -106,7 +109,6 @@ public class RoomService {
         int dayOfMonth = date.getDayOfMonth();
 
         for (RoomMember member : memberships) {
-            // 🌟 Safety Guard: Only advance users whose access requests are APPROVED
             if (member.getStatus() != RoomMember.MembershipStatus.APPROVED) continue;
 
             if (isUndo) {
@@ -126,6 +128,34 @@ public class RoomService {
                     }
                 }
             }
+        }
+    }
+
+    // 🌟 5. NEW ROOM ACCOUNTABILITY TASK ENGINE: Moves member token when all room tasks are completed
+    @Transactional
+    public void evaluateRoomTaskLudoProgression(Long roomId, Long userId, LocalDate date) {
+        List<RoomTask> roomTasks = roomTaskRepository.findByRoomId(roomId);
+        long totalTasksCount = roomTasks.size();
+        if (totalTasksCount == 0) return;
+
+        List<Long> taskIds = roomTasks.stream().map(RoomTask::getId).toList();
+        long completedTasksCount = roomTaskLogRepository
+                .countByRoomTaskIdInAndUserIdAndLogDateAndCompletedTrue(taskIds, userId, date);
+
+        // If everything assigned to this arena is fully cleared for today, advance step on track!
+        if (totalTasksCount == completedTasksCount) {
+            RoomMemberId memberId = new RoomMemberId(roomId, userId);
+            roomMemberRepository.findById(memberId).ifPresent(member -> {
+                int dayOfMonth = date.getDayOfMonth();
+                if (member.getCurrentStep() < dayOfMonth) {
+                    member.setCurrentStep(member.getCurrentStep() + 1);
+                    roomMemberRepository.save(member);
+
+                    // Broadcast dynamic updates live via WebSocket messaging channels
+                    messagingTemplate.convertAndSend("/topic/room/" + roomId,
+                            new StepUpdatePayload(roomId, userId, member.getCurrentStep()));
+                }
+            });
         }
     }
 }

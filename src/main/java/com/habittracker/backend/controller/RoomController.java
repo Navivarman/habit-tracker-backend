@@ -4,8 +4,9 @@ import com.habittracker.backend.model.*;
 import com.habittracker.backend.repository.*;
 import com.habittracker.backend.service.RoomService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.transaction.annotation.Transactional; // 🌟 Added for explicit transactional operations
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
@@ -19,8 +20,12 @@ public class RoomController {
 
     @Autowired private RoomService roomService;
     @Autowired private RoomMemberRepository roomMemberRepository;
-    @Autowired private RoomRepository roomRepository; // 🌟 Added dependency
-    @Autowired private UserRepository userRepository; // 🌟 Added dependency
+    @Autowired private RoomRepository roomRepository;
+    @Autowired private UserRepository userRepository;
+
+    // 🌟 Added custom task managers dependencies
+    @Autowired private RoomTaskRepository roomTaskRepository;
+    @Autowired private RoomTaskLogRepository roomTaskLogRepository;
 
     // 1. Create a challenge room
     @PostMapping
@@ -93,7 +98,7 @@ public class RoomController {
 
     // 9. LEAVE: Leave an approved room or cancel a pending request
     @DeleteMapping("/{roomId}/leave")
-    @Transactional // 🌟 Enforces safe hibernate execution context block
+    @Transactional
     public ResponseEntity<?> leaveRoom(@PathVariable Long roomId, @RequestParam Long userId) {
         roomMemberRepository.deleteByRoomIdAndUserId(roomId, userId);
         return ResponseEntity.ok(Map.of("message", "Successfully left the room environment."));
@@ -117,9 +122,50 @@ public class RoomController {
         member.setRoom(room);
         member.setUser(user);
         member.setCurrentStep(0);
-        member.setStatus(RoomMember.MembershipStatus.PENDING); // Enters Pending State
+        member.setStatus(RoomMember.MembershipStatus.PENDING);
         member.setRole(RoomMember.RoomRole.MEMBER);
 
         return ResponseEntity.ok(roomMemberRepository.save(member));
+    }
+
+    // 🌟 11. ADMIN ROLE ONLY: Append a brand new milestone assignment task to this arena ecosystem
+    @PostMapping("/{roomId}/tasks")
+    public ResponseEntity<?> createRoomTask(@PathVariable Long roomId, @RequestParam Long adminId, @RequestBody Map<String, String> payload) {
+        RoomMember check = roomMemberRepository.findByRoomIdAndUserId(roomId, adminId).orElse(null);
+        if (check == null || check.getRole() != RoomMember.RoomRole.ADMIN) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Access Denied: Only Room Admins can create tasks.");
+        }
+
+        Room room = roomRepository.findById(roomId).orElseThrow();
+        RoomTask task = new RoomTask();
+        task.setTitle(payload.get("title"));
+        task.setRoom(room);
+
+        return ResponseEntity.ok(roomTaskRepository.save(task));
+    }
+
+    // 🌟 12. ROOM MEMBER ACTION: Toggle room specific task item completion states and trigger token progression checks
+    @PostMapping("/tasks/{taskId}/toggle")
+    public ResponseEntity<?> toggleRoomTask(@PathVariable Long taskId, @RequestParam Long userId) {
+        LocalDate today = LocalDate.now();
+        RoomTask task = roomTaskRepository.findById(taskId).orElseThrow();
+        User user = userRepository.findById(userId).orElseThrow();
+
+        RoomTaskLog log = roomTaskLogRepository.findByRoomTaskIdAndUserIdAndLogDate(taskId, userId, today)
+                .orElse(new RoomTaskLog());
+
+        if (log.getId() == null) {
+            log.setRoomTask(task);
+            log.setUser(user);
+            log.setLogDate(today);
+        }
+
+        log.setCompleted(!log.isCompleted());
+        roomTaskLogRepository.save(log);
+
+        // Evaluate Ludo token advancement loop rules instantly!
+        roomService.evaluateRoomTaskLudoProgression(task.getRoom().getId(), userId, today);
+
+        return ResponseEntity.ok(Map.of("completed", log.isCompleted()));
     }
 }
