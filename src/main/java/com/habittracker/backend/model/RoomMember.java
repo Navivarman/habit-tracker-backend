@@ -25,4 +25,22 @@ public class RoomMember {
 
     @Column(nullable = false)
     private int currentStep = 0; // The Ludo token position (0 to 31)
+
+    // 🌟 ADDED FOR JOIN WORKFLOW & PERMISSIONS
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private MembershipStatus status = MembershipStatus.PENDING; // PENDING, APPROVED, REJECTED
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private RoomRole role = RoomRole.MEMBER; // ADMIN, MEMBER
+
+    // Enums definition
+    public enum MembershipStatus {
+        PENDING, APPROVED, REJECTED
+    }
+
+    public enum RoomRole {
+        ADMIN, MEMBER
+    }
 }

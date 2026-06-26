@@ -19,17 +19,29 @@ public class AuthController {
     @Autowired private JwtUtil jwtUtil;
 
     // 1️⃣ PUBLIC REGISTRATION ENDPOINT
+    // 1️⃣ REFACTORED REGISTRATION ENDPOINT (Using Map to prevent mapping crashes)
     @PostMapping("/register")
-    public ResponseEntity<?> registerUser(@RequestBody User user) {
-        if (userRepository.findByUsername(user.getUsername()).isPresent()) {
+    public ResponseEntity<?> registerUser(@RequestBody Map<String, String> payload) {
+        String username = payload.get("username");
+        String email = payload.get("email");
+        String password = payload.get("password");
+
+        // Defensive check for empty or null strings
+        if (username == null || password == null || username.trim().isEmpty() || password.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body("Error: Username and password fields cannot be empty!");
+        }
+
+        if (userRepository.findByUsername(username).isPresent()) {
             return ResponseEntity.badRequest().body("Error: Username is already taken!");
         }
 
-        // For development, we store a basic string placeholder.
-        // Note: Production builds should pass this through a BCryptPasswordEncoder!
-        user.setPasswordHash(user.getPasswordHash());
-        User savedUser = userRepository.save(user);
+        // Build and save the entity dynamically
+        User user = new User();
+        user.setUsername(username);
+        user.setEmail(email);
+        user.setPasswordHash(password); // If you add BCrypt later, encode it here!
 
+        User savedUser = userRepository.save(user);
         return ResponseEntity.status(HttpStatus.CREATED).body(savedUser);
     }
 

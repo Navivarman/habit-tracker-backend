@@ -4,7 +4,7 @@ import com.habittracker.backend.model.*;
 import com.habittracker.backend.repository.*;
 import com.habittracker.backend.dto.StepUpdatePayload;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.messaging.simp.SimpMessagingTemplate; // 👈 Required for WebSockets
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,9 +19,9 @@ public class RoomService {
     @Autowired private RoomMemberRepository roomMemberRepository;
     @Autowired private UserRepository userRepository;
     @Autowired private DailyHabitLogRepository logRepository;
-    @Autowired private SimpMessagingTemplate messagingTemplate; // 👈 Injected message broker dispatcher
+    @Autowired private SimpMessagingTemplate messagingTemplate;
 
-    // 1. Create a room with a random 6-character alphanumeric invite code
+    // 1. Create a room (Creator becomes an APPROVED ADMIN instantly)
     @Transactional
     public Room createRoom(String name, Long creatorId, LocalDate targetMonth) {
         User creator = userRepository.findById(creatorId)
@@ -29,19 +29,27 @@ public class RoomService {
 
         Room room = new Room();
         room.setName(name);
-        room.setTargetMonthYear(targetMonth.withDayOfMonth(1)); // Lock to 1st of month
+        room.setTargetMonthYear(targetMonth.withDayOfMonth(1));
         room.setCreator(creator);
         room.setInviteCode(UUID.randomUUID().toString().substring(0, 6).toUpperCase());
 
         Room savedRoom = roomRepository.save(room);
 
-        // Auto-join the creator to their own room
-        joinRoom(savedRoom.getInviteCode(), creatorId);
+        // Auto-join the creator as an APPROVED ADMIN
+        RoomMemberId memberId = new RoomMemberId(savedRoom.getId(), creatorId);
+        RoomMember adminMember = new RoomMember();
+        adminMember.setId(memberId);
+        adminMember.setRoom(savedRoom);
+        adminMember.setUser(creator);
+        adminMember.setCurrentStep(0);
+        adminMember.setStatus(RoomMember.MembershipStatus.APPROVED); // 🌟 Admin is pre-approved
+        adminMember.setRole(RoomMember.RoomRole.ADMIN);             // 🌟 Admin role assignment
 
+        roomMemberRepository.save(adminMember);
         return savedRoom;
     }
 
-    // 2. Join a room via Invite Code
+    // 2. Submit a request to Join a room via Invite Code (Saves as PENDING MEMBER)
     @Transactional
     public RoomMember joinRoom(String inviteCode, Long userId) {
         Room room = roomRepository.findByInviteCode(inviteCode.toUpperCase())
@@ -59,11 +67,36 @@ public class RoomService {
         member.setRoom(room);
         member.setUser(user);
         member.setCurrentStep(0);
+        member.setStatus(RoomMember.MembershipStatus.PENDING); // 🌟 Requires Admin authorization
+        member.setRole(RoomMember.RoomRole.MEMBER);           // 🌟 Base role
 
         return roomMemberRepository.save(member);
     }
 
-    // 3. 🏁 THE LUDO ENGINE: Evaluate and move token if all habits are completed + Broadcast over WebSockets
+    // 3. Admin workflow actions: Approve or Reject a user's join request
+    @Transactional
+    public void processJoinRequest(Long roomId, Long targetUserId, Long adminId, boolean approve) {
+        // Enforce security guard check
+        RoomMember adminCheck = roomMemberRepository.findByRoomIdAndUserId(roomId, adminId)
+                .orElseThrow(() -> new RuntimeException("Admin context mapping not found"));
+
+        if (adminCheck.getRole() != RoomMember.RoomRole.ADMIN) {
+            throw new RuntimeException("Access Denied: Only the Room Admin can process join requests.");
+        }
+
+        RoomMemberId targetId = new RoomMemberId(roomId, targetUserId);
+        RoomMember pendingMember = roomMemberRepository.findById(targetId)
+                .orElseThrow(() -> new RuntimeException("Pending registration record not found"));
+
+        if (approve) {
+            pendingMember.setStatus(RoomMember.MembershipStatus.APPROVED);
+            roomMemberRepository.save(pendingMember);
+        } else {
+            roomMemberRepository.delete(pendingMember); // Clear from database if rejected
+        }
+    }
+
+    // 4. THE LUDO ENGINE (Unchanged, evaluating step progression for APPROVED users only)
     @Transactional
     public void evaluateLudoProgression(Long userId, LocalDate date, boolean isUndo) {
         long totalHabits = logRepository.countTotalHabitsForUser(userId);
@@ -73,28 +106,21 @@ public class RoomService {
         int dayOfMonth = date.getDayOfMonth();
 
         for (RoomMember member : memberships) {
+            // 🌟 Safety Guard: Only advance users whose access requests are APPROVED
+            if (member.getStatus() != RoomMember.MembershipStatus.APPROVED) continue;
+
             if (isUndo) {
-                // ↩️ UNDO LOGIC: If it was a perfect day but the user just unchecked a habit
-                // and their token had already advanced for today, pull it back by 1.
                 if (completedHabits == totalHabits - 1 && member.getCurrentStep() > 0) {
                     member.setCurrentStep(member.getCurrentStep() - 1);
                     roomMemberRepository.save(member);
-                    System.out.println("↩️ Undo detected! Pulled User " + userId + " back to step " + member.getCurrentStep());
-
-                    // 🚀 Live Stream the regression change to everyone in the room
                     messagingTemplate.convertAndSend("/topic/room/" + member.getRoom().getId(),
                             new StepUpdatePayload(member.getRoom().getId(), userId, member.getCurrentStep()));
                 }
             } else {
-                // 🚀 PROGRESS LOGIC: If all required habits are now completed
                 if (totalHabits > 0 && totalHabits == completedHabits) {
-                    // Only advance if they haven't already taken their step for today
                     if (member.getCurrentStep() < dayOfMonth) {
                         member.setCurrentStep(member.getCurrentStep() + 1);
                         roomMemberRepository.save(member);
-                        System.out.println("🎉 Legit step! User " + userId + " moved forward to step " + member.getCurrentStep());
-
-                        // 🚀 Live Stream the advancement change to everyone in the room
                         messagingTemplate.convertAndSend("/topic/room/" + member.getRoom().getId(),
                                 new StepUpdatePayload(member.getRoom().getId(), userId, member.getCurrentStep()));
                     }
