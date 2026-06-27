@@ -133,29 +133,49 @@ public class RoomService {
 
     // 🌟 5. NEW ROOM ACCOUNTABILITY TASK ENGINE: Moves member token when all room tasks are completed
     @Transactional
-    public void evaluateRoomTaskLudoProgression(Long roomId, Long userId, LocalDate date) {
+    public void evaluateRoomTaskLudoProgression(Long roomId, Long userId, LocalDate date, boolean isUndo) {
+        // 1. Fetch total tasks configured for this room arena
         List<RoomTask> roomTasks = roomTaskRepository.findByRoomId(roomId);
         long totalTasksCount = roomTasks.size();
         if (totalTasksCount == 0) return;
 
+        // 2. Compute completed tasks for today
         List<Long> taskIds = roomTasks.stream().map(RoomTask::getId).toList();
         long completedTasksCount = roomTaskLogRepository
                 .countByRoomTaskIdInAndUserIdAndLogDateAndCompletedTrue(taskIds, userId, date);
 
-        // If everything assigned to this arena is fully cleared for today, advance step on track!
-        if (totalTasksCount == completedTasksCount) {
-            RoomMemberId memberId = new RoomMemberId(roomId, userId);
-            roomMemberRepository.findById(memberId).ifPresent(member -> {
-                int dayOfMonth = date.getDayOfMonth();
-                if (member.getCurrentStep() < dayOfMonth) {
-                    member.setCurrentStep(member.getCurrentStep() + 1);
+        RoomMemberId memberId = new RoomMemberId(roomId, userId);
+        roomMemberRepository.findById(memberId).ifPresent(member -> {
+            int dayOfMonth = date.getDayOfMonth();
+
+            if (isUndo) {
+                // ↩️ UNDO LOGIC: If they broke perfection (e.g., they had totalTasks, but now have totalTasks - 1)
+                // AND their token had already advanced for today, pull it back by exactly 1.
+                if (completedTasksCount == totalTasksCount - 1 && member.getCurrentStep() > 0) {
+                    member.setCurrentStep(member.getCurrentStep() - 1);
                     roomMemberRepository.save(member);
 
-                    // Broadcast dynamic updates live via WebSocket messaging channels
+                    System.out.println("↩️ Room Undo! Pulled User " + userId + " back to step " + member.getCurrentStep());
+
+                    // Broadcast live state regression across WebSockets
                     messagingTemplate.convertAndSend("/topic/room/" + roomId,
                             new StepUpdatePayload(roomId, userId, member.getCurrentStep()));
                 }
-            });
-        }
+            } else {
+                // 🚀 PROGRESS LOGIC: Only advance if ALL tasks are completed and they haven't stepped yet today
+                if (totalTasksCount == completedTasksCount) {
+                    if (member.getCurrentStep() < dayOfMonth) {
+                        member.setCurrentStep(member.getCurrentStep() + 1);
+                        roomMemberRepository.save(member);
+
+                        System.out.println("🎉 Room Step Taken! User " + userId + " advanced to step " + member.getCurrentStep());
+
+                        // Broadcast live state progression across WebSockets
+                        messagingTemplate.convertAndSend("/topic/room/" + roomId,
+                                new StepUpdatePayload(roomId, userId, member.getCurrentStep()));
+                    }
+                }
+            }
+        });
     }
 }

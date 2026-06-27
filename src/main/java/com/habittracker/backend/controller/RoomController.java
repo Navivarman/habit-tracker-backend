@@ -1,11 +1,13 @@
 package com.habittracker.backend.controller;
 
+import com.habittracker.backend.dto.TaskUpdatePayload;
 import com.habittracker.backend.model.*;
 import com.habittracker.backend.repository.*;
 import com.habittracker.backend.service.RoomService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
@@ -26,6 +28,7 @@ public class RoomController {
     // 🌟 Added custom task managers dependencies
     @Autowired private RoomTaskRepository roomTaskRepository;
     @Autowired private RoomTaskLogRepository roomTaskLogRepository;
+    @Autowired private SimpMessagingTemplate messagingTemplate;
 
     // 1. Create a challenge room
     @PostMapping
@@ -128,7 +131,7 @@ public class RoomController {
         return ResponseEntity.ok(roomMemberRepository.save(member));
     }
 
-    // 🌟 11. ADMIN ROLE ONLY: Append a brand new milestone assignment task to this arena ecosystem
+    // 11. ADMIN ROLE ONLY: Create a task and broadcast it instantly
     @PostMapping("/{roomId}/tasks")
     public ResponseEntity<?> createRoomTask(@PathVariable Long roomId, @RequestParam Long adminId, @RequestBody Map<String, String> payload) {
         RoomMember check = roomMemberRepository.findByRoomIdAndUserId(roomId, adminId).orElse(null);
@@ -140,11 +143,16 @@ public class RoomController {
         RoomTask task = new RoomTask();
         task.setTitle(payload.get("title"));
         task.setRoom(room);
+        RoomTask savedTask = roomTaskRepository.save(task);
 
-        return ResponseEntity.ok(roomTaskRepository.save(task));
+        // 🚀 BROADCAST: Tell everyone in the room that a new task was created
+        messagingTemplate.convertAndSend("/topic/room/" + roomId + "/tasks",
+                new TaskUpdatePayload(roomId, "CREATED", savedTask.getId(), savedTask.getTitle(), false));
+
+        return ResponseEntity.ok(savedTask);
     }
 
-    // 🌟 12. ROOM MEMBER ACTION: Toggle room specific task item completion states and trigger token progression checks
+    // 12. ROOM MEMBER ACTION: Toggle a task and broadcast the change
     @PostMapping("/tasks/{taskId}/toggle")
     public ResponseEntity<?> toggleRoomTask(@PathVariable Long taskId, @RequestParam Long userId) {
         LocalDate today = LocalDate.now();
@@ -163,9 +171,39 @@ public class RoomController {
         log.setCompleted(!log.isCompleted());
         roomTaskLogRepository.save(log);
 
-        // Evaluate Ludo token advancement loop rules instantly!
-        roomService.evaluateRoomTaskLudoProgression(task.getRoom().getId(), userId, today);
+        boolean isUndo = !log.isCompleted();
+        roomService.evaluateRoomTaskLudoProgression(task.getRoom().getId(), userId, today, isUndo);
+
+        // 🚀 BROADCAST: Inform the room that this task's completion status shifted
+        messagingTemplate.convertAndSend("/topic/room/" + task.getRoom().getId() + "/tasks",
+                new TaskUpdatePayload(task.getRoom().getId(), "TOGGLED", task.getId(), task.getTitle(), log.isCompleted()));
 
         return ResponseEntity.ok(Map.of("completed", log.isCompleted()));
+    }
+
+    // 13. FETCH ROOM TASKS WITH COMPLETION LOGS FOR TODAY
+    @GetMapping("/{roomId}/tasks")
+    public ResponseEntity<List<Map<String, Object>>> getRoomTasksForUser(
+            @PathVariable Long roomId,
+            @RequestParam Long userId) {
+
+        LocalDate today = LocalDate.now();
+        List<RoomTask> tasks = roomTaskRepository.findByRoomId(roomId);
+
+        // Map each task alongside its daily completion log status for this specific user
+        List<Map<String, Object>> response = tasks.stream().map(task -> {
+            boolean isCompleted = roomTaskLogRepository
+                    .findByRoomTaskIdAndUserIdAndLogDate(task.getId(), userId, today)
+                    .map(RoomTaskLog::isCompleted)
+                    .orElse(false);
+
+            return Map.of(
+                    "id", (Object) task.getId(),
+                    "title", (Object) task.getTitle(),
+                    "completed", (Object) isCompleted
+            );
+        }).toList();
+
+        return ResponseEntity.ok(response);
     }
 }
