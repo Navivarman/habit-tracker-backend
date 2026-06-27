@@ -12,4 +12,6 @@ public interface HabitRepository extends JpaRepository<Habit, Long> {
 
     @Query("SELECT h FROM Habit h WHERE h.isActive = true")
     List<Habit> findAllActiveHabits();
+
+    List<Habit> findByUserId(Long userId);
 }

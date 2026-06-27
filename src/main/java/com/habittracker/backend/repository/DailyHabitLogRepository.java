@@ -14,6 +14,9 @@ public interface DailyHabitLogRepository extends JpaRepository<DailyHabitLog, Lo
 
     List<DailyHabitLog> findByUserIdAndLogDate(Long userId, LocalDate logDate);
 
+    // 🌟 ADDED: Required by HistoryController to scan completion states for specific days
+    Optional<DailyHabitLog> findByHabitIdAndLogDate(Long habitId, LocalDate logDate);
+
     // Count total active habits scheduled for a user
     @Query("SELECT COUNT(h) FROM Habit h WHERE h.user.id = :userId AND h.isActive = true")
     long countTotalHabitsForUser(@Param("userId") Long userId);

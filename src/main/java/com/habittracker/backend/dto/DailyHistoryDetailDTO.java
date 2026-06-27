@@ -1,13 +1,16 @@
 package com.habittracker.backend.dto;
 
-import com.habittracker.backend.model.DailyHabitLog;
+import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 import java.util.List;
 
 @Data
+@AllArgsConstructor
+@NoArgsConstructor
 public class DailyHistoryDetailDTO {
-    private List<DailyHabitLog> logs;
-    private long totalCompleted;
-    private long totalScheduled;
+    private List<String> completedTasks;
+    private List<String> pendingTasks;
+    private int totalTasks;
     private double completionPercentage;
 }

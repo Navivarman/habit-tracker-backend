@@ -1,67 +1,88 @@
 package com.habittracker.backend.controller;
 
-import com.habittracker.backend.dto.DailyHistoryDetailDTO;
-import com.habittracker.backend.dto.HeatmapStatusDTO;
-import com.habittracker.backend.model.DailyHabitLog;
-import com.habittracker.backend.repository.DailyHabitLogRepository;
+import com.habittracker.backend.dto.*;
+import com.habittracker.backend.model.*;
+import com.habittracker.backend.repository.*;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/history")
-@CrossOrigin(origins = "http://localhost:5173")
+@CrossOrigin(origins = "*", allowedHeaders = "*")
 public class HistoryController {
 
     @Autowired private DailyHabitLogRepository logRepository;
+    @Autowired private UserRepository userRepository;
+    @Autowired private HabitRepository habitRepository;
 
-    // 🟢 🟡 🔴 Fetch complete year heatmap statuses aggregated dynamically
+    // 1. GET FULL HEATMAP MATRIX MATRIX (Starts from user registration boundary)
     @GetMapping("/heatmap/{userId}")
-    public ResponseEntity<List<HeatmapStatusDTO>> getHeatmapSummary(@PathVariable Long userId) {
-        List<DailyHabitLog> allLogs = logRepository.findAll(); // Simple reference fetch
+    public ResponseEntity<?> getHeatmapMatrix(@PathVariable Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User profile context not found"));
 
-        // Group logs by date
-        Map<LocalDate, List<DailyHabitLog>> groupedByDate = allLogs.stream()
-                .filter(log -> log.getUser().getId().equals(userId))
-                .collect(Collectors.groupingBy(DailyHabitLog::getLogDate));
+        // Journey boundary: fallback to 90 days ago if registration metadata is missing
+        LocalDate startDate = (user.getCreatedAt() != null) ? user.getCreatedAt().toLocalDate() : LocalDate.now().minusDays(90);
+        LocalDate endDate = LocalDate.now();
 
-        List<HeatmapStatusDTO> summaryList = new ArrayList<>();
+        List<HeatmapStatusDTO> heatmapData = new ArrayList<>();
+        LocalDate current = startDate;
 
-        groupedByDate.forEach((date, logs) -> {
-            long total = logs.size();
-            long completed = logs.stream().filter(DailyHabitLog::isCompleted).count();
+        while (!current.isAfter(endDate)) {
+            long total = logRepository.countTotalHabitsForUser(userId);
+            long completed = logRepository.countCompletedHabitsForUserAndDate(userId, current);
 
-            String status = "RED";
-            if (completed == total && total > 0) status = "GREEN";
-            else if (completed > 0) status = "YELLOW";
+            int intensity = 0;
+            if (total > 0 && completed > 0) {
+                double pct = (double) completed / total;
+                if (pct <= 0.25) intensity = 1;
+                else if (pct <= 0.50) intensity = 2;
+                else if (pct <= 0.75) intensity = 3;
+                else intensity = 4;
+            }
 
-            summaryList.add(new HeatmapStatusDTO(date, status));
-        });
+            heatmapData.add(new HeatmapStatusDTO(current, completed, total, intensity));
+            current = current.plusDays(1);
+        }
 
-        return ResponseEntity.ok(summaryList);
+        return ResponseEntity.ok(Map.of(
+                "journeyStartDate", startDate,
+                "matrix", heatmapData
+        ));
     }
 
-    // Click square breakdown details fetching engine
-    @GetMapping("/detail/{userId}")
-    public ResponseEntity<DailyHistoryDetailDTO> getDailyDetails(
-            @PathVariable Long userId,
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+    // 2. GET DRILLDOWN DETAILED DAILY SNAPSHOT METRICS (On cell click)
+    @GetMapping("/daily-detail")
+    public ResponseEntity<DailyHistoryDetailDTO> getDailyDetail(
+            @RequestParam Long userId,
+            @RequestParam String dateStr) {
 
-        List<DailyHabitLog> logs = logRepository.findByUserIdAndLogDate(userId, date);
-        long completed = logs.stream().filter(DailyHabitLog::isCompleted).count();
-        long total = logs.size();
+        LocalDate targetDate = LocalDate.parse(dateStr);
 
-        DailyHistoryDetailDTO detail = new DailyHistoryDetailDTO();
-        detail.setLogs(logs);
-        detail.setTotalScheduled(total);
-        detail.setTotalCompleted(completed);
-        detail.setCompletionPercentage(total > 0 ? ((double) completed / total) * 100 : 0.0);
+        // Pull actual individual habits and complete logs manually
+        List<Habit> userHabits = habitRepository.findByUserId(userId);
+        List<String> completed = new ArrayList<>();
+        List<String> pending = new ArrayList<>();
 
-        return ResponseEntity.ok(detail);
+        for (Habit h : userHabits) {
+            boolean isDone = logRepository.findByHabitIdAndLogDate(h.getId(), targetDate)
+                    .map(DailyHabitLog::isCompleted)
+                    .orElse(false);
+
+            if (isDone) {
+                completed.add(h.getTitle());
+            } else if (h.isActive()) {
+                pending.add(h.getTitle());
+            }
+        }
+
+        int total = completed.size() + pending.size();
+        double pct = (total > 0) ? Math.round(((double) completed.size() / total) * 100.0) : 0.0;
+
+        return ResponseEntity.ok(new DailyHistoryDetailDTO(completed, pending, total, pct));
     }
 }
